@@ -14,6 +14,14 @@ void SystemAPI::PrepareForSleep(bool suspending){
             resumeApp = nullptr;
         }
         screenAPI->drawFullscreenImage("/usr/share/remarkable/suspended.png");
+        if (DeviceSettings::instance().getDeviceType() == DeviceType::RM2) {
+            // RM2 needs some time to draw sleep image
+            struct timespec args{
+                .tv_sec = 1,
+                .tv_nsec = 0,
+            }, res;
+            nanosleep(&args, &res);
+        }
         qDebug() << "Suspending...";
         buttonHandler->setEnabled(false);
         releaseSleepInhibitors();
