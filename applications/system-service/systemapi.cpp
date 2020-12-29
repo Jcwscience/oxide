@@ -4,7 +4,6 @@
 #include "devicesettings.h"
 
 void SystemAPI::PrepareForSleep(bool suspending){
-    auto device = deviceSettings.getDeviceType();
     if(suspending){
         auto path = appsAPI->currentApplication();
         if(path.path() != "/"){
@@ -13,21 +12,19 @@ void SystemAPI::PrepareForSleep(bool suspending){
         }else{
             resumeApp = nullptr;
         }
-        screenAPI->drawFullscreenImage("/usr/share/remarkable/suspended.png");
+        drawSleepImage();
         if (DeviceSettings::instance().getDeviceType() == DeviceType::RM2) {
             // RM2 needs some time to draw sleep image
+            // 0.5s is sometimes not enough, so I set it to 0.6s
             struct timespec args{
-                .tv_sec = 1,
-                .tv_nsec = 0,
-            }, res;
-            nanosleep(&args, &res);
+                .tv_sec = 0,
+                .tv_nsec = 600000000,
+            };
+            nanosleep(&args, NULL);
         }
         qDebug() << "Suspending...";
         buttonHandler->setEnabled(false);
         releaseSleepInhibitors();
-        if(device == DeviceSettings::DeviceType::RM2){
-            system("rmmod brcmfmac");
-        }
     }else{
         inhibitSleep();
         qDebug() << "Resuming...";
@@ -35,14 +32,15 @@ void SystemAPI::PrepareForSleep(bool suspending){
         if(resumeApp == nullptr){
             resumeApp = appsAPI->getApplication(appsAPI->startupApplication());
         }
+        if (DeviceSettings::instance().getDeviceType() == DeviceType::RM2) {
+            qDebug() << "Resetting module";
+            qDebug() << "Exit code: " << system("rmmod brcmfmac && modprobe brcmfmac");
+        }
         resumeApp->resume();
         buttonHandler->setEnabled(true);
         if(m_autoSleep && powerAPI->chargerState() != PowerAPI::ChargerConnected){
             qDebug() << "Suspend timer re-enabled due to resume";
             suspendTimer.start(m_autoSleep * 60 * 1000);
-        }
-        if(device == DeviceSettings::DeviceType::RM2){
-            system("modprobe brcmfmac");
         }
     }
 }
@@ -50,7 +48,6 @@ void SystemAPI::setAutoSleep(int autoSleep){
     if(autoSleep < 0 || autoSleep > 10){
         return;
     }
-    qDebug() << "Auto Sleep" << autoSleep;
     m_autoSleep = autoSleep;
     if(m_autoSleep && powerAPI->chargerState() != PowerAPI::ChargerConnected){
         suspendTimer.setInterval(m_autoSleep * 60 * 1000);
@@ -59,18 +56,8 @@ void SystemAPI::setAutoSleep(int autoSleep){
     settings.sync();
 }
 void SystemAPI::uninhibitAll(QString name){
-    if(powerOffInhibited()){
-        powerOffInhibitors.removeAll(name);
-        if(!powerOffInhibited()){
-            emit powerOffInhibitedChanged(false);
-        }
-    }
-    if(sleepInhibited()){
-        sleepInhibitors.removeAll(name);
-        if(!sleepInhibited()){
-            emit sleepInhibitedChanged(false);
-        }
-    }
+    powerOffInhibitors.removeAll(name);
+    sleepInhibitors.removeAll(name);
     if(!sleepInhibited() && m_autoSleep && powerAPI->chargerState() != PowerAPI::ChargerConnected && !suspendTimer.isActive()){
         qDebug() << "Suspend timer re-enabled due to uninhibit" << name;
         suspendTimer.start(m_autoSleep * 60 * 1000);
@@ -94,10 +81,7 @@ void SystemAPI::activity(){
         qDebug() << "Suspend timer disabled";
     }
 }
-void SystemAPI::uninhibitSleep(QDBusMessage message){
-    if(!sleepInhibited()){
-        return;
-    }
+void SystemAPI::uninhibitSleep(QDBusMessage message) {
     sleepInhibitors.removeAll(message.service());
     if(!sleepInhibited() && m_autoSleep && powerAPI->chargerState() != PowerAPI::ChargerConnected){
         if(!suspendTimer.isActive()){
@@ -106,13 +90,9 @@ void SystemAPI::uninhibitSleep(QDBusMessage message){
         }
         releaseSleepInhibitors(true);
     }
-    if(!sleepInhibited()){
-        emit sleepInhibitedChanged(false);
-    }
 }
 void SystemAPI::timeout(){
     if(m_autoSleep && powerAPI->chargerState() != PowerAPI::ChargerConnected){
-        qDebug() << "Automatic suspend due to inactivity...";
         suspend();
     }
 }
